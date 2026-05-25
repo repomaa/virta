@@ -22,7 +22,16 @@
     "watchapp": {
       "watchface": false
     },
-    "messageKeys": [],
+    "messageKeys": [
+      "REQUEST",
+      "REGION",
+      "RANGE",
+      "STATUS",
+      "COUNT",
+      "BASE",
+      "PRICES",
+      "ERROR"
+    ],
     "resources": {
       "media": []
     }

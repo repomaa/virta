@@ -9,9 +9,10 @@ import {
   Style,
 } from "piu/MC";
 import Button from "pebble/button";
+import Message from "pebble/message";
 
 interface PriceModel {
-  DateTime?: string | null;
+  DateTime?: string | Date | null;
   PriceNoTax?: number | null;
   PriceWithTax?: number | null;
 }
@@ -122,6 +123,87 @@ let rangeHours = 3;
 let settingsSelection = 0; // 0 = region, 1 = range
 let inSettings = false;
 let refreshTimeout: ReturnType<typeof setTimeout> | null = null;
+let messageReady = false;
+let pendingRequest = false;
+let requestTimeout: ReturnType<typeof setTimeout> | null = null;
+
+const message = new Message({
+  keys: ["REQUEST", "REGION", "RANGE", "STATUS", "COUNT", "BASE", "PRICES", "ERROR"],
+  input: 256,
+  output: 256,
+  onReadable() {
+    if (requestTimeout) {
+      clearTimeout(requestTimeout);
+      requestTimeout = null;
+    }
+
+    const msg = this.read();
+    const status = msg.get("STATUS");
+    if (status === 1) {
+      const err = msg.get("ERROR") || "Unknown error";
+      if (!inSettings) {
+        priceLabel.string = "Error";
+        hourLabel.string = String(err);
+      }
+      console.log("Fetch error: " + err);
+      refreshTimeout = setTimeout(requestPrices, 5 * 60 * 1000);
+      isFetching = false;
+      return;
+    }
+
+    try {
+      const count = msg.get("COUNT") as number;
+      const base = msg.get("BASE") as number;
+      const pricesStr = msg.get("PRICES") as string;
+      if (!count || !pricesStr) {
+        throw new Error("Empty response");
+      }
+
+      const encodedPrices = pricesStr.split(",");
+      const prices: (number | null)[] = [];
+      for (let i = 0; i < encodedPrices.length; i++) {
+        const s = encodedPrices[i];
+        prices.push(s === "" ? null : parseInt(s, 10) / 1000000);
+      }
+
+      const newFutureData: PriceModel[] = [];
+      for (let i = 0; i < count; i++) {
+        const ts = (base + i * 3600) * 1000;
+        const d = new Date(ts);
+        newFutureData.push({
+          DateTime: d,
+          PriceWithTax: prices[i] ?? null,
+        });
+      }
+
+      allData = newFutureData;
+      futureData = newFutureData;
+      selectedIndex = 0;
+      updateMainUI();
+      scheduleNextRefresh();
+    } catch (e) {
+      const err = e instanceof Error ? e.message : "Parse error";
+      if (!inSettings) {
+        priceLabel.string = "Error";
+        hourLabel.string = err;
+      }
+      console.log("Parse error: " + err);
+      refreshTimeout = setTimeout(requestPrices, 5 * 60 * 1000);
+    } finally {
+      isFetching = false;
+    }
+  },
+  onWritable() {
+    messageReady = true;
+    if (pendingRequest) {
+      pendingRequest = false;
+      requestPrices();
+    }
+  },
+  onSuspend() {
+    messageReady = false;
+  },
+});
 
 // Load persisted settings
 try {
@@ -347,20 +429,18 @@ function getPrice(item: PriceModel): number | null {
 }
 
 function getDate(item: PriceModel): Date | undefined {
-  if (item.DateTime != null) {
-    const dt = item.DateTime;
-    try {
-      const year = parseInt(dt.slice(0, 4), 10);
-      const month = parseInt(dt.slice(5, 7), 10) - 1;
-      const day = parseInt(dt.slice(8, 10), 10);
-      const hour = parseInt(dt.slice(11, 13), 10);
-      return new Date(year, month, day, hour, 0, 0);
-    } catch {
-      return undefined;
-    }
+  if (item.DateTime == null) return undefined;
+  if (item.DateTime instanceof Date) return item.DateTime;
+  const dt = item.DateTime as string;
+  try {
+    const year = parseInt(dt.slice(0, 4), 10);
+    const month = parseInt(dt.slice(5, 7), 10) - 1;
+    const day = parseInt(dt.slice(8, 10), 10);
+    const hour = parseInt(dt.slice(11, 13), 10);
+    return new Date(year, month, day, hour, 0, 0);
+  } catch {
+    return undefined;
   }
-
-  return undefined;
 }
 
 function formatHours(date?: Date): string {
@@ -522,7 +602,7 @@ function exitSettings(): void {
   app.empty();
   app.add(mainColumn);
   if (regionBeforeSettings !== regionIndex) {
-    fetchPrices();
+    requestPrices();
   } else {
     computeCheapestWindow();
     updateMainUI();
@@ -541,14 +621,13 @@ function scheduleNextRefresh(): void {
   );
   const delay = nextHour.getTime() - now.getTime();
   console.log(`Next refresh in ${(delay / 1000 / 60).toFixed(1)} min`);
-  refreshTimeout = setTimeout(fetchPrices, delay);
+  refreshTimeout = setTimeout(requestPrices, delay);
 }
 
 let isFetching = false;
 
-async function fetchPrices(): Promise<void> {
+function requestPrices(): void {
   if (isFetching) return;
-  isFetching = true;
 
   if (refreshTimeout) {
     clearTimeout(refreshTimeout);
@@ -556,61 +635,49 @@ async function fetchPrices(): Promise<void> {
   }
 
   try {
-    console.log("Fetching prices...");
+    console.log("Requesting prices...");
     if (!inSettings) {
       priceLabel.string = "Fetching...";
       hourLabel.string = "";
     }
 
-    const url = new URL("https://api.spot-hinta.fi/TodayAndDayForward");
-    url.search =
-      "region=" +
-      encodeURIComponent(REGIONS[regionIndex].code) +
-      "&priceResolution=60";
-
-    const urlString = url.toString();
-    console.log("Url: " + urlString);
-    const response = await fetch(urlString, { method: "GET" });
-    if (!response.ok) {
-      throw new Error("HTTP " + response.status);
+    if (!messageReady) {
+      pendingRequest = true;
+      return;
     }
-    console.log("Got response: ", response.status);
 
-    const data: PriceModel[] = await response.json();
-    if (!Array.isArray(data) || data.length === 0) {
-      throw new Error("Empty response");
-    }
-    console.log("Got datapoints: ", data.length);
+    isFetching = true;
+    pendingRequest = false;
 
-    allData = data;
+    const map = new Map<string, string | number>([
+      ["REQUEST", 1],
+      ["REGION", REGIONS[regionIndex].code],
+      ["RANGE", rangeHours],
+    ]);
+    message.write(map);
 
-    const now = new Date();
-    const currentHourStart = getHourStart(now);
-    const currentHourTime = currentHourStart.getTime();
-
-    futureData = [];
-    for (let i = 0; i < data.length; i++) {
-      const dt = getDate(data[i]);
-      if (!dt) continue;
-      const itemHourStart = getHourStart(dt);
-      if (itemHourStart.getTime() >= currentHourTime) {
-        futureData.push(data[i]);
+    if (requestTimeout) clearTimeout(requestTimeout);
+    requestTimeout = setTimeout(() => {
+      if (isFetching) {
+        isFetching = false;
+        console.log("Request timeout");
+        if (!inSettings) {
+          priceLabel.string = "Error";
+          hourLabel.string = "Timeout";
+        }
+        refreshTimeout = setTimeout(requestPrices, 30 * 1000);
       }
-    }
-
-    selectedIndex = 0;
-    updateMainUI();
-    scheduleNextRefresh();
+    }, 15000);
   } catch (e) {
-    const message = e instanceof Error ? e.message : "Unknown error";
+    isFetching = false;
+    const err = e instanceof Error ? e.message : "Send error";
     if (!inSettings) {
       priceLabel.string = "Error";
-      hourLabel.string = message;
+      hourLabel.string = err;
     }
-    console.log("Fetch error: " + message);
-    refreshTimeout = setTimeout(fetchPrices, 5 * 60 * 1000);
+    console.log("Request error: " + err);
+    refreshTimeout = setTimeout(requestPrices, 5 * 60 * 1000);
   }
-  isFetching = false;
 }
 
 // --- Buttons ---
@@ -673,19 +740,19 @@ const button = new Button({
 function onReady(): void {
   console.log("Ready. PebbleKit connected: " + watch.connected.pebblekit);
   if (watch.connected.pebblekit) {
-    fetchPrices();
+    requestPrices();
   }
 }
 
 watch.addEventListener("connected", (): void => {
   if (watch.connected.pebblekit) {
-    fetchPrices();
+    requestPrices();
   }
 });
 
 watch.addEventListener("hourchange", (): void => {
   console.log("Hour changed, refreshing");
-  fetchPrices();
+  requestPrices();
 });
 
 onReady();
