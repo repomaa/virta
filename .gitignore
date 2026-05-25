@@ -1,0 +1,4 @@
+/build/
+/.direnv/
+/node_modules/
+/tsconfig.json
