@@ -1,7 +1,7 @@
 {
   "name": "virta",
   "author": "Joakim Repomaa",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "keywords": [
     "pebble-app"
   ],
@@ -35,7 +35,14 @@
       "SETTINGS"
     ],
     "resources": {
-      "media": []
+      "media": [
+        {
+          "type": "bitmap",
+          "name": "MENU_ICON",
+          "file": "images/flash_icon.png",
+          "menuIcon": true
+        }
+      ]
     },
     "capabilities": [
       "configurable"
