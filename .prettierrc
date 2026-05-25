@@ -1,0 +1,10 @@
+{
+  "overrides": [
+    {
+      "files": ["src/pkjs/*.js"],
+      "options": {
+        "trailingComma": "es5"
+      }
+    }
+  ]
+}

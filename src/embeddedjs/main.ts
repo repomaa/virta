@@ -12,9 +12,8 @@ import Button from "pebble/button";
 import Message from "pebble/message";
 
 interface PriceModel {
-  DateTime?: string | Date | null;
-  PriceNoTax?: number | null;
-  PriceWithTax?: number | null;
+  hour: number;
+  price: number;
 }
 
 interface Region {
@@ -43,6 +42,7 @@ const REGIONS: Region[] = [
 const STORAGE_KEYS = {
   region: "regionCode",
   range: "rangeHours",
+  data: "data",
 };
 
 // --- Styles & Skins ---
@@ -69,24 +69,6 @@ const hourStyle = new Style({
   top: 1,
 });
 
-const menuItemSkin = new Skin({ fill: "black" });
-const selectedMenuItemSkin = new Skin({ fill: "white" });
-const separatorSkin = new Skin({ fill: "#CCCCCC" });
-
-const menuTitleStyle = new Style({
-  font: "14px Gothic",
-  color: ["white", "black"],
-  horizontal: "left",
-  top: 2,
-});
-
-const menuValueStyle = new Style({
-  font: "18px Gothic",
-  color: ["white", "black"],
-  horizontal: "left",
-  top: 0,
-});
-
 const cheapestLabelStyle = new Style({
   font: "14px Gothic",
   color: "yellow",
@@ -109,26 +91,31 @@ const maxLabelStyle = new Style({
 });
 
 // --- State ---
-let allData: PriceModel[] = [];
 let futureData: PriceModel[] = [];
 let selectedIndex = 0;
-let cheapestStart = -1;
 let cheapestLength = 1;
-let cheapestStartTime: Date | undefined = undefined;
-let cheapestAvg = 0;
+let cheapestStartIndex = 0;
 let minBarIndex = -1;
 let maxBarIndex = -1;
 let regionIndex = 3; // default FI
 let rangeHours = 3;
-let settingsSelection = 0; // 0 = region, 1 = range
-let inSettings = false;
 let refreshTimeout: ReturnType<typeof setTimeout> | null = null;
 let messageReady = false;
 let pendingRequest = false;
 let requestTimeout: ReturnType<typeof setTimeout> | null = null;
 
 const message = new Message({
-  keys: ["REQUEST", "REGION", "RANGE", "STATUS", "COUNT", "BASE", "PRICES", "ERROR"],
+  keys: [
+    "REQUEST",
+    "REGION",
+    "RANGE",
+    "STATUS",
+    "COUNT",
+    "BASE",
+    "PRICES",
+    "ERROR",
+    "SETTINGS",
+  ],
   input: 256,
   output: 256,
   onReadable() {
@@ -138,13 +125,41 @@ const message = new Message({
     }
 
     const msg = this.read();
+    const settingsFlag = msg.get("SETTINGS");
+    if (settingsFlag === 1) {
+      const newRegion = msg.get("REGION") as string;
+      const newRange = msg.get("RANGE") as number;
+      let changed = false;
+      if (newRegion) {
+        const idx = REGIONS.findIndex((r) => r.code === newRegion);
+        if (idx >= 0) {
+          regionIndex = idx;
+          changed = true;
+        }
+      }
+      if (
+        newRange != null &&
+        !isNaN(newRange) &&
+        newRange >= 1 &&
+        newRange <= 24
+      ) {
+        rangeHours = newRange;
+        changed = true;
+      }
+      if (changed) {
+        saveSettings();
+        updateMainUI();
+        requestPrices();
+      }
+      isFetching = false;
+      return;
+    }
+
     const status = msg.get("STATUS");
     if (status === 1) {
       const err = msg.get("ERROR") || "Unknown error";
-      if (!inSettings) {
-        priceLabel.string = "Error";
-        hourLabel.string = String(err);
-      }
+      priceLabel.string = "Error";
+      hourLabel.string = String(err);
       console.log("Fetch error: " + err);
       refreshTimeout = setTimeout(requestPrices, 5 * 60 * 1000);
       isFetching = false;
@@ -163,7 +178,7 @@ const message = new Message({
       const prices: (number | null)[] = [];
       for (let i = 0; i < encodedPrices.length; i++) {
         const s = encodedPrices[i];
-        prices.push(s === "" ? null : parseInt(s, 10) / 1000000);
+        prices.push(s === "" ? null : parseInt(s) / 100);
       }
 
       const newFutureData: PriceModel[] = [];
@@ -171,22 +186,22 @@ const message = new Message({
         const ts = (base + i * 3600) * 1000;
         const d = new Date(ts);
         newFutureData.push({
-          DateTime: d,
-          PriceWithTax: prices[i] ?? null,
+          hour: d.getHours(),
+          price: prices[i] ?? Infinity,
         });
       }
 
-      allData = newFutureData;
       futureData = newFutureData;
+      localStorage.setItem(
+        STORAGE_KEYS.data,
+        JSON.stringify({ date: formatDate(new Date()), data: futureData }),
+      );
       selectedIndex = 0;
       updateMainUI();
-      scheduleNextRefresh();
     } catch (e) {
       const err = e instanceof Error ? e.message : "Parse error";
-      if (!inSettings) {
-        priceLabel.string = "Error";
-        hourLabel.string = err;
-      }
+      priceLabel.string = "Error";
+      hourLabel.string = err;
       console.log("Parse error: " + err);
       refreshTimeout = setTimeout(requestPrices, 5 * 60 * 1000);
     } finally {
@@ -217,11 +232,21 @@ try {
     const parsed = parseInt(savedRange, 10);
     if (!isNaN(parsed) && parsed >= 1 && parsed <= 24) rangeHours = parsed;
   }
+  const savedData = localStorage.getItem(STORAGE_KEYS.data);
+  if (savedData && savedData.startsWith("{")) {
+    const now = new Date();
+    const { date, data }: { date: string; data: PriceModel[] } =
+      JSON.parse(savedData);
+
+    const [year, month, day] = date.split("-").map((s) => parseInt(s));
+    futureData = data.filter(({ hour }) => {
+      const then = new Date(year, month, day, hour, 0);
+      return then >= now;
+    });
+  }
 } catch (e) {
   // ignore
 }
-
-let regionBeforeSettings = regionIndex;
 
 // --- Labels ---
 const priceLabel = new Label(null, { style: priceStyle, string: "Loading..." });
@@ -232,77 +257,6 @@ const cheapestLabel = new Label(null, {
   style: cheapestLabelStyle,
   string: "",
 });
-
-// --- Settings UI ---
-const regionTitle = new Label(null, {
-  style: menuTitleStyle,
-  string: "Region",
-  state: 1,
-});
-const regionValue = new Label(null, {
-  style: menuValueStyle,
-  string: REGIONS[regionIndex].name,
-  state: 1,
-});
-const regionItem = new Column(null, {
-  left: 0,
-  right: 0,
-  top: 0,
-  height: 44,
-  skin: selectedMenuItemSkin,
-  contents: [
-    new Content(null, {
-      left: 0,
-      right: 0,
-      top: 0,
-      height: 1,
-      skin: separatorSkin,
-    }),
-    new Column(null, {
-      left: 8,
-      right: 8,
-      top: 2,
-      bottom: 2,
-      contents: [regionTitle, regionValue],
-    }),
-  ],
-});
-
-const rangeTitle = new Label(null, {
-  style: menuTitleStyle,
-  string: "Range",
-  state: 0,
-});
-const rangeValue = new Label(null, {
-  style: menuValueStyle,
-  string: `${rangeHours} h`,
-  state: 0,
-});
-const rangeItem = new Column(null, {
-  left: 0,
-  right: 0,
-  top: 0,
-  height: 44,
-  skin: menuItemSkin,
-  contents: [
-    new Content(null, {
-      left: 0,
-      right: 0,
-      top: 0,
-      height: 1,
-      skin: separatorSkin,
-    }),
-    new Column(null, {
-      left: 8,
-      right: 8,
-      top: 2,
-      bottom: 2,
-      contents: [rangeTitle, rangeValue],
-    }),
-  ],
-});
-
-let settingsColumn: Column;
 
 // --- Graph Port ---
 class GraphBehavior {
@@ -341,9 +295,7 @@ class GraphBehavior {
       const by = ph - barHeight - 2;
 
       const inCheapest =
-        cheapestStart >= 0 &&
-        i >= cheapestStart &&
-        i < cheapestStart + cheapestLength;
+        i >= cheapestStartIndex && i < cheapestStartIndex + cheapestLength;
       let color = "#555555";
       if (i === selectedIndex) {
         color = "#00FFFF";
@@ -399,56 +351,25 @@ mainColumn = new Column(null, {
 });
 app.add(mainColumn);
 
-settingsColumn = new Column(null, {
-  left: 0,
-  right: 0,
-  top: ROUND_TOP_MARGIN,
-  bottom: ROUND_BOTTOM_MARGIN,
-  skin: blackSkin,
-  contents: [
-    regionItem,
-    rangeItem,
-    new Content(null, {
-      left: 0,
-      right: 0,
-      top: 0,
-      height: 1,
-      skin: separatorSkin,
-    }),
-  ],
-});
-
 // --- Helpers ---
 function pad(n: number): string {
   return n < 10 ? "0" + n : "" + n;
 }
 
-function getPrice(item: PriceModel): number | null {
-  if (item.PriceWithTax != null) return item.PriceWithTax;
-  return null;
+function getPrice(item: PriceModel): number {
+  return item.price;
 }
 
-function getDate(item: PriceModel): Date | undefined {
-  if (item.DateTime == null) return undefined;
-  if (item.DateTime instanceof Date) return item.DateTime;
-  const dt = item.DateTime as string;
-  try {
-    const year = parseInt(dt.slice(0, 4), 10);
-    const month = parseInt(dt.slice(5, 7), 10) - 1;
-    const day = parseInt(dt.slice(8, 10), 10);
-    const hour = parseInt(dt.slice(11, 13), 10);
-    return new Date(year, month, day, hour, 0, 0);
-  } catch {
-    return undefined;
-  }
-}
-
-function formatHours(date?: Date): string {
-  return `${pad(date?.getHours() ?? 0)}:00`;
+function getTime(item: PriceModel): string {
+  return `${pad(item.hour)}:00`;
 }
 
 function formatPrice(price: Number): string {
   return `${price.toFixed(2)} c/kWh`;
+}
+
+function formatDate(date: Date): string {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
 function getHourStart(d: Date): Date {
@@ -463,11 +384,11 @@ function getHourStart(d: Date): Date {
   );
 }
 
-function computeCheapestWindow(): void {
+function computeCheapestWindow() {
   const n = futureData.length;
-  cheapestStart = -1;
+  cheapestStartIndex = 0;
+  let cheapestStartHour = futureData[0].hour;
   cheapestLength = Math.min(rangeHours, n);
-  if (n === 0 || rangeHours <= 0) return;
 
   let minSum = Infinity;
   for (let i = 0; i <= n - cheapestLength; i++) {
@@ -483,16 +404,14 @@ function computeCheapestWindow(): void {
     }
     if (valid && sum < minSum) {
       minSum = sum;
-      cheapestStart = i;
-      cheapestStartTime = getDate(futureData[i]);
+      cheapestStartIndex = i;
     }
   }
-  cheapestAvg = minSum / cheapestLength;
+  const cheapestAvg = minSum / cheapestLength;
+  return cheapestAvg;
 }
 
 function updateMainUI(): void {
-  if (inSettings) return;
-
   if (futureData.length === 0) {
     priceLabel.string = "N/A";
     hourLabel.string = "No data";
@@ -510,14 +429,13 @@ function updateMainUI(): void {
   const price = getPrice(selected);
   priceLabel.string = price != null ? formatPrice(price) : "N/A";
 
-  const dt = getDate(selected);
-  let hourText = "";
-  if (dt) {
-    if (selectedIndex === 0) {
-      hourText = `Now (${formatHours(dt)})`;
-    } else {
-      hourText = formatHours(dt);
-    }
+  const time = getTime(selected);
+  let hourText;
+
+  if (selectedIndex === 0) {
+    hourText = `Now (${time})`;
+  } else {
+    hourText = time;
   }
   hourLabel.string = hourText;
 
@@ -539,43 +457,20 @@ function updateMainUI(): void {
     }
   }
   if (minBarIndex >= 0 && maxBarIndex >= 0) {
-    const minDt = getDate(futureData[minBarIndex]);
-    const maxDt = getDate(futureData[maxBarIndex]);
-    minLabel.string = `Min: ${formatPrice(minPrice)} @ ${formatHours(minDt)}`;
-    maxLabel.string = `Max: ${formatPrice(maxPrice)} @ ${formatHours(maxDt)}`;
+    const minHour = getTime(futureData[minBarIndex]);
+    const maxHour = getTime(futureData[maxBarIndex]);
+    minLabel.string = `Min: ${formatPrice(minPrice)} @ ${minHour}`;
+    maxLabel.string = `Max: ${formatPrice(maxPrice)} @ ${maxHour}`;
   } else {
     minLabel.string = "";
     maxLabel.string = "";
   }
 
-  computeCheapestWindow();
-  if (cheapestStartTime) {
-    cheapestLabel.string = `Cheapest ${cheapestLength} h: ${formatPrice(cheapestAvg)} @ ${formatHours(cheapestStartTime)}`;
-  } else {
-    cheapestLabel.string = "";
-  }
+  const cheapestAvg = computeCheapestWindow();
+  const cheapestStartTime = getTime(futureData[cheapestStartIndex]);
+  cheapestLabel.string = `Cheapest ${cheapestLength} h: ${formatPrice(cheapestAvg)} @ ${cheapestStartTime}`;
 
   graphPort.invalidate();
-}
-
-function updateSettingsUI(): void {
-  regionValue.string = REGIONS[regionIndex].name;
-  rangeValue.string = `${rangeHours} h`;
-  if (settingsSelection === 0) {
-    regionItem.skin = selectedMenuItemSkin;
-    regionTitle.state = 1;
-    regionValue.state = 1;
-    rangeItem.skin = menuItemSkin;
-    rangeTitle.state = 0;
-    rangeValue.state = 0;
-  } else {
-    regionItem.skin = menuItemSkin;
-    regionTitle.state = 0;
-    regionValue.state = 0;
-    rangeItem.skin = selectedMenuItemSkin;
-    rangeTitle.state = 1;
-    rangeValue.state = 1;
-  }
 }
 
 function saveSettings(): void {
@@ -585,43 +480,6 @@ function saveSettings(): void {
   } catch (e) {
     // ignore
   }
-}
-
-function enterSettings(): void {
-  inSettings = true;
-  regionBeforeSettings = regionIndex;
-  settingsSelection = 0;
-  app.empty();
-  app.add(settingsColumn);
-  updateSettingsUI();
-}
-
-function exitSettings(): void {
-  saveSettings();
-  inSettings = false;
-  app.empty();
-  app.add(mainColumn);
-  if (regionBeforeSettings !== regionIndex) {
-    requestPrices();
-  } else {
-    computeCheapestWindow();
-    updateMainUI();
-  }
-}
-
-function scheduleNextRefresh(): void {
-  const now = new Date();
-  const nextHour = new Date(
-    now.getFullYear(),
-    now.getMonth(),
-    now.getDate(),
-    now.getHours() + 1,
-    1,
-    0,
-  );
-  const delay = nextHour.getTime() - now.getTime();
-  console.log(`Next refresh in ${(delay / 1000 / 60).toFixed(1)} min`);
-  refreshTimeout = setTimeout(requestPrices, delay);
 }
 
 let isFetching = false;
@@ -636,7 +494,7 @@ function requestPrices(): void {
 
   try {
     console.log("Requesting prices...");
-    if (!inSettings) {
+    if (futureData.length === 0) {
       priceLabel.string = "Fetching...";
       hourLabel.string = "";
     }
@@ -661,67 +519,27 @@ function requestPrices(): void {
       if (isFetching) {
         isFetching = false;
         console.log("Request timeout");
-        if (!inSettings) {
-          priceLabel.string = "Error";
-          hourLabel.string = "Timeout";
-        }
+        priceLabel.string = "Error";
+        hourLabel.string = "Timeout";
         refreshTimeout = setTimeout(requestPrices, 30 * 1000);
       }
     }, 15000);
   } catch (e) {
     isFetching = false;
     const err = e instanceof Error ? e.message : "Send error";
-    if (!inSettings) {
-      priceLabel.string = "Error";
-      hourLabel.string = err;
-    }
+    priceLabel.string = "Error";
+    hourLabel.string = err;
     console.log("Request error: " + err);
     refreshTimeout = setTimeout(requestPrices, 5 * 60 * 1000);
   }
 }
 
 // --- Buttons ---
-const button = new Button({
-  types: ["up", "down", "select", "back"],
-  onPush(down: number, type: string): void {
+new Button({
+  types: ["up", "down"],
+  onPush(down, type) {
     if (!down) return;
     console.log("Button: " + type);
-
-    if (type === "select" && !inSettings) {
-      enterSettings();
-      return;
-    }
-
-    if (inSettings) {
-      if (type === "back") {
-        exitSettings();
-        return;
-      }
-
-      if (type === "select") {
-        settingsSelection = settingsSelection === 0 ? 1 : 0;
-        updateSettingsUI();
-        return;
-      }
-
-      if (settingsSelection === 0) {
-        // Region
-        if (type === "up") {
-          regionIndex = (regionIndex + 1) % REGIONS.length;
-        } else if (type === "down") {
-          regionIndex = (regionIndex - 1 + REGIONS.length) % REGIONS.length;
-        }
-      } else {
-        // Range
-        if (type === "up") {
-          rangeHours = Math.min(24, rangeHours + 1);
-        } else if (type === "down") {
-          rangeHours = Math.max(1, rangeHours - 1);
-        }
-      }
-      updateSettingsUI();
-      return;
-    }
 
     // Main view navigation
     if (futureData.length === 0) return;
@@ -738,6 +556,7 @@ const button = new Button({
 
 // --- Lifecycle ---
 function onReady(): void {
+  updateMainUI();
   console.log("Ready. PebbleKit connected: " + watch.connected.pebblekit);
   if (watch.connected.pebblekit) {
     requestPrices();

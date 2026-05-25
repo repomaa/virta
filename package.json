@@ -30,7 +30,8 @@
       "COUNT",
       "BASE",
       "PRICES",
-      "ERROR"
+      "ERROR",
+      "SETTINGS"
     ],
     "resources": {
       "media": []
