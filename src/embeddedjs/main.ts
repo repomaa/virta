@@ -601,7 +601,7 @@ async function fetchPrices(): Promise<void> {
     selectedIndex = 0;
     updateMainUI();
     scheduleNextRefresh();
-  } catch (e: unknown) {
+  } catch (e) {
     const message = e instanceof Error ? e.message : "Unknown error";
     if (!inSettings) {
       priceLabel.string = "Error";
