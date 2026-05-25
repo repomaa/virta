@@ -125,10 +125,9 @@ const message = new Message({
     }
 
     const msg = this.read();
-    const settingsFlag = msg.get("SETTINGS");
-    if (settingsFlag === 1) {
-      const newRegion = msg.get("REGION") as string;
-      const newRange = msg.get("RANGE") as number;
+    const newRegion = msg.get("REGION") as string;
+    const newRange = msg.get("RANGE") as number;
+    if (newRegion || (newRange != null && !isNaN(newRange))) {
       let changed = false;
       if (newRegion) {
         const idx = REGIONS.findIndex((r) => r.code === newRegion);
