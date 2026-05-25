@@ -1,9 +1,19 @@
 {
- 	"include":  [
+	"include": [
 		"$(MODDABLE)/examples/manifest_mod.json",
 		"$(MODDABLE)/examples/manifest_typings.json"
 	],
 	"modules": {
 		"*": "./main"
+	},
+	"typescript": {
+		"tsconfig": {
+			"compilerOptions": {
+				"target": "esnext",
+				"module": "esnext",
+				"lib": ["esnext"],
+				"baseUrl": "."
+			}
+		}
 	}
 }
