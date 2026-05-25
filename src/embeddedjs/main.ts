@@ -103,6 +103,7 @@ let refreshTimeout: ReturnType<typeof setTimeout> | null = null;
 let messageReady = false;
 let pendingRequest = false;
 let requestTimeout: ReturnType<typeof setTimeout> | null = null;
+let needsRefresh = false;
 
 const message = new Message({
   keys: [
@@ -148,9 +149,12 @@ const message = new Message({
       if (changed) {
         saveSettings();
         updateMainUI();
-        requestPrices();
+        if (isFetching) {
+          needsRefresh = true;
+        } else {
+          requestPrices();
+        }
       }
-      isFetching = false;
       return;
     }
 
@@ -162,6 +166,10 @@ const message = new Message({
       console.log("Fetch error: " + err);
       refreshTimeout = setTimeout(requestPrices, 5 * 60 * 1000);
       isFetching = false;
+      if (needsRefresh) {
+        needsRefresh = false;
+        requestPrices();
+      }
       return;
     }
 
@@ -205,6 +213,10 @@ const message = new Message({
       refreshTimeout = setTimeout(requestPrices, 5 * 60 * 1000);
     } finally {
       isFetching = false;
+      if (needsRefresh) {
+        needsRefresh = false;
+        requestPrices();
+      }
     }
   },
   onWritable() {
