@@ -1,18 +1,19 @@
 module.exports = [
   {
     type: "heading",
-    defaultValue: "Virta Settings"
+    defaultValue: "Virta Settings",
   },
   {
     type: "text",
-    defaultValue: "Configure your electricity price region and cheapest window."
+    defaultValue:
+      "Configure your electricity price region and cheapest window.",
   },
   {
     type: "section",
     items: [
       {
         type: "heading",
-        defaultValue: "Region"
+        defaultValue: "Region",
       },
       {
         type: "select",
@@ -34,17 +35,17 @@ module.exports = [
           { label: "SE1 Lulea", value: "SE1" },
           { label: "SE2 Sundsvall", value: "SE2" },
           { label: "SE3 Stockholm", value: "SE3" },
-          { label: "SE4 Malmo", value: "SE4" }
-        ]
-      }
-    ]
+          { label: "SE4 Malmo", value: "SE4" },
+        ],
+      },
+    ],
   },
   {
     type: "section",
     items: [
       {
         type: "heading",
-        defaultValue: "Window"
+        defaultValue: "Window",
       },
       {
         type: "slider",
@@ -53,12 +54,12 @@ module.exports = [
         label: "Cheapest Window (hours)",
         min: 1,
         max: 24,
-        step: 1
-      }
-    ]
+        step: 1,
+      },
+    ],
   },
   {
     type: "submit",
-    defaultValue: "Save Settings"
-  }
+    defaultValue: "Save Settings",
+  },
 ];

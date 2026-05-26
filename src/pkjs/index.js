@@ -107,7 +107,7 @@ function fetchAndSend(region) {
 
       sendPrices(futureItems.length, base, encoded.join(","));
     } catch (e) {
-      sendError(e.message || "Parse error");
+      sendError(e.message);
     }
   };
   xhr.onerror = function () {

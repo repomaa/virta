@@ -1,19 +1,25 @@
 {
-	"include": [
-		"$(MODDABLE)/examples/manifest_mod.json",
-		"$(MODDABLE)/examples/manifest_typings.json"
-	],
-	"modules": {
-		"*": "./main"
-	},
-	"typescript": {
-		"tsconfig": {
-			"compilerOptions": {
-				"target": "esnext",
-				"module": "esnext",
-				"lib": ["esnext"],
-				"baseUrl": "."
-			}
-		}
-	}
+  "include": [
+    "$(MODDABLE)/examples/manifest_mod.json",
+    "$(MODDABLE)/examples/manifest_typings.json"
+  ],
+  "modules": {
+    "*": "./main",
+    "./constants": "./constants",
+    "./format": "./format",
+    "./styles": "./styles",
+    "./state": "./state",
+    "./graph": "./graph",
+    "./messenger": "./messenger"
+  },
+  "typescript": {
+    "tsconfig": {
+      "compilerOptions": {
+        "target": "esnext",
+        "module": "esnext",
+        "lib": ["esnext"],
+        "baseUrl": "."
+      }
+    }
+  }
 }
